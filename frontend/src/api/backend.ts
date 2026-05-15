@@ -1,81 +1,116 @@
-import type { AuthSession, GalleryImage, ImageSource, PaginatedImages } from '../types'
+import type { ApiResponse, ImageMeta, PaginatedData } from '../types';
 
-type ApiResponse<T> = { success: true; data: T } | { success: false; error: { code: string; message: string } }
+const BASE_URL = '';
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
-  const payload = (await response.json()) as ApiResponse<T>
-  if (!response.ok || !payload.success) {
-    const message = payload.success ? response.statusText : payload.error.message
-    throw new Error(message || 'Request failed')
+function getAuthHeaders(): Record<string, string> {
+  const token = sessionStorage.getItem('ai-image-station:token');
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
-  return payload.data
+  return headers;
 }
 
-export function login(accessCode: string) {
-  return request<AuthSession>('/api/auth/login', {
+async function request<T>(url: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const response = await fetch(`${BASE_URL}${url}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+      ...options?.headers,
+    },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let message = `HTTP ${response.status}`;
+    try {
+      const json = JSON.parse(body);
+      message = json.error?.message || json.message || message;
+    } catch { /* ignore */ }
+    return { success: false, error: { code: `HTTP_${response.status}`, message } } as ApiResponse<T>;
+  }
+  return response.json();
+}
+
+/** Upload an image and its metadata to the backend. */
+export async function uploadImage(file: Blob, metadata: {
+  prompt: string;
+  negativePrompt?: string;
+  model: string;
+  provider: string;
+  width?: number;
+  height?: number;
+  source: string;
+  generationParams?: Record<string, unknown>;
+}): Promise<ApiResponse<ImageMeta>> {
+  const formData = new FormData();
+  formData.append('file', file, 'generated.png');
+  formData.append('prompt', metadata.prompt);
+  if (metadata.negativePrompt) formData.append('negativePrompt', metadata.negativePrompt);
+  formData.append('model', metadata.model);
+  formData.append('provider', metadata.provider);
+  if (metadata.width) formData.append('width', String(metadata.width));
+  if (metadata.height) formData.append('height', String(metadata.height));
+  formData.append('source', metadata.source);
+  if (metadata.generationParams) {
+    formData.append('generationParams', JSON.stringify(metadata.generationParams));
+  }
+
+  const response = await fetch(`${BASE_URL}/api/images`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let message = `HTTP ${response.status}`;
+    try { message = JSON.parse(body).error?.message || message; } catch { /* ignore */ }
+    return { success: false, error: { code: 'UPLOAD_FAILED', message } } as ApiResponse<ImageMeta>;
+  }
+  return response.json();
+}
+
+/** List images from the gallery. */
+export async function listImages(params?: {
+  page?: number;
+  pageSize?: number;
+  sort?: string;
+  source?: string;
+  keyword?: string;
+}): Promise<ApiResponse<PaginatedData<ImageMeta>>> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set('page', String(params.page));
+  if (params?.pageSize) searchParams.set('pageSize', String(params.pageSize));
+  if (params?.sort) searchParams.set('sort', params.sort);
+  if (params?.source) searchParams.set('source', params.source);
+  if (params?.keyword) searchParams.set('keyword', params.keyword);
+  const qs = searchParams.toString();
+  return request<PaginatedData<ImageMeta>>(`/api/images${qs ? `?${qs}` : ''}`);
+}
+
+/** Get a single image's details. */
+export async function getImage(id: string): Promise<ApiResponse<ImageMeta>> {
+  return request<ImageMeta>(`/api/images/${id}`);
+}
+
+/** Delete an image. */
+export async function deleteImage(id: string): Promise<ApiResponse<{ id: string; deleted: boolean }>> {
+  return request(`/api/images/${id}`, { method: 'DELETE' });
+}
+
+/** Login with access code and store token. */
+export async function login(accessCode: string): Promise<ApiResponse<{ token: string; expiresAt: string }>> {
+  const resp = await request<{ token: string; expiresAt: string }>('/api/auth/login', {
+    method: 'POST',
     body: JSON.stringify({ accessCode }),
-  })
+  });
+  if (resp.success && resp.data.token) {
+    sessionStorage.setItem('ai-image-station:token', resp.data.token);
+  }
+  return resp;
 }
 
-export function getMe(token: string) {
-  return request<{ authenticated: boolean; expiresAt: string }>('/api/auth/me', {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-}
-
-export type UploadImageInput = {
-  file: File | Blob
-  prompt: string
-  negativePrompt?: string
-  model: string
-  provider: string
-  width?: number
-  height?: number
-  source: ImageSource
-  seed?: string
-  generationParams?: Record<string, unknown>
-}
-
-export function uploadImage(token: string, input: UploadImageInput) {
-  const form = new FormData()
-  form.append('file', input.file, input.file instanceof File ? input.file.name : 'generated-image.png')
-  form.append('prompt', input.prompt)
-  form.append('model', input.model)
-  form.append('provider', input.provider)
-  form.append('source', input.source)
-  if (input.negativePrompt) form.append('negativePrompt', input.negativePrompt)
-  if (input.width) form.append('width', String(input.width))
-  if (input.height) form.append('height', String(input.height))
-  if (input.seed) form.append('seed', input.seed)
-  if (input.generationParams) form.append('generationParams', JSON.stringify(input.generationParams))
-
-  return request<GalleryImage>('/api/images', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  })
-}
-
-export function listImages(token: string, params: { page?: number; pageSize?: number; sort?: string; source?: string; keyword?: string } = {}) {
-  const query = new URLSearchParams()
-  Object.entries(params).forEach(([key, value]) => value && query.set(key, String(value)))
-  return request<PaginatedImages>(`/api/images?${query.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-}
-
-export function deleteImage(token: string, id: string) {
-  return request<{ deleted: boolean }>(`/api/images/${id}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  })
-}
-
-export function getStats(token: string) {
-  return request<{ totalImages: number; totalSize: number }>('/api/stats', {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+/** Check current session. */
+export async function getMe(): Promise<ApiResponse<{ authenticated: boolean; expiresAt: string }>> {
+  return request('/api/auth/session');
 }

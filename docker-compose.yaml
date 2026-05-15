@@ -1,37 +1,44 @@
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  ai-image-station:
+    image: magnetpack/ai-image-station:latest
     container_name: ai-image-station
     restart: unless-stopped
+
     ports:
       - "8080:8080"
-    env_file:
-      - .env
+
     volumes:
-      - app-data:/data
+      - ./data:/data
+
+    environment:
+      # --- Required ---
+      - PORT=8080
+      - ACCESS_CODE=[REDACTED]
+      - SERVER_SECRET=[REDACTED]
+
+      # --- Optional ---
+      # Public reachable URL for generating direct image links (图床模式)
+      - PUBLIC_BASE_URL=https://[REDACTED]
+      # CORS: comma-separated list of allowed origins
+      - ALLOWED_ORIGINS=https://[REDACTED],http://localhost:5173
+
+      # --- Tuning (optional) ---
+      - MAX_UPLOAD_SIZE_MB=20
+      - DATA_DIR=/data
+      - FAILED_LOGIN_LIMIT=5
+      - FAILED_LOGIN_WINDOW_SECONDS=60
+      - FAILED_LOGIN_LOCK_SECONDS=600
+
+    # Health check (uses the public frontend, always returns 200 if server is up)
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 5s
 
-  nginx:
-    image: nginx:alpine
-    container_name: ai-image-station-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - nginx-certs:/etc/nginx/certs
-    depends_on:
-      app:
-        condition: service_healthy
-
-volumes:
-  app-data:
-  nginx-certs:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,11 +1,16 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react()],
-  test: {
-    environment: 'jsdom',
-    setupFiles: './src/test/setup.ts',
-    globals: true,
+  plugins: [react(), tailwindcss()],
+  build: {
+    outDir: '../backend/static',
+  },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8080',
+      '/images': 'http://localhost:8080',
+    },
   },
 })

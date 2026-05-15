@@ -18,34 +18,10 @@ backend/vendor/
 .vscode/
 .idea/
 *.swp
-*.swo
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Docker
-docker-compose.override.yaml
-.docker/
-
-# Logs
-*.log
-
-# Misc
-.ssh/
-.cache/
-.local/
-.npm/
-.config/
-.pip/
-.profile
-.bashrc
-.bash_logout
-.bash_history
-.pydistutils.cfg
-.zshrc
-.sudo_as_admin_successful
-.cache/
-.cargo/
-.python_history
-
+# Data
+data/

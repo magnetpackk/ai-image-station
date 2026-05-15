@@ -1,67 +1,127 @@
-export type ProviderType = 'openai' | 'mj-proxy' | 'custom'
-export type ImageSource = 'text-to-image' | 'image-to-image' | 'manual-upload'
-export type ThemeMode = 'light' | 'dark' | 'system'
+import type { ResolutionLevel } from '../lib/constants';
 
-export type EncryptedSecret = {
-  version: 1
-  algorithm: 'AES-GCM'
-  kdf: 'PBKDF2'
-  salt: string
-  iv: string
-  ciphertext: string
+// ── Image metadata ──
+export type ImageSource = 'text-to-image' | 'image-to-image' | 'manual-upload';
+
+export interface ImageMeta {
+  id: string;
+  filename: string;
+  url: string;
+  thumbnailUrl?: string;
+  prompt: string;
+  negativePrompt?: string;
+  model: string;
+  provider: string;
+  source: ImageSource;
+  width?: number;
+  height?: number;
+  size: number;
+  mimeType: string;
+  createdAt: string;
+  generationParams?: Record<string, unknown>;
 }
 
-export type AIProviderConfig = {
-  id: string
-  name: string
-  type: ProviderType
-  baseUrl: string
-  apiKeyEncrypted?: EncryptedSecret
-  apiKey?: string
-  defaultModel: string
-  enabled: boolean
+// ── API response wrappers ──
+export interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+  error?: { code: string; message: string };
 }
 
-export type AppSettings = {
-  autoSave: boolean
-  rememberApiKey: boolean
-  theme: ThemeMode
-  activeProviderId?: string
-  providers: AIProviderConfig[]
-  imageDefaults: {
-    size: '1024x1024' | '1024x1792' | '1792x1024'
-    quality: 'standard' | 'hd'
-    style: 'vivid' | 'natural'
-  }
+export interface PaginatedData<T> {
+  items: T[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
-export type AuthSession = { token: string; expiresAt: string }
-
-export type GalleryImage = {
-  id: string
-  url: string
-  thumbnailUrl?: string
-  filename?: string
-  prompt: string
-  negativePrompt?: string
-  model: string
-  provider: string
-  width?: number
-  height?: number
-  size?: number
-  mimeType?: string
-  source: ImageSource
-  createdAt: string
-  generationParams?: Record<string, unknown>
+// ── Settings ──
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKeyEncrypted: string;
+  defaultModel: string;
 }
 
-export type PaginatedImages = {
-  items: GalleryImage[]
-  page: number
-  pageSize: number
-  total: number
-  totalPages: number
+export interface OptimizerConfig {
+  baseUrl: string;
+  apiKeyEncrypted: string;
+  model: string;
+  systemPrompt: string;
 }
 
-export type GenerationStatus = 'idle' | 'generating' | 'fetching-image' | 'uploading' | 'saved' | 'failed'
-export type GeneratedImage = { id: string; previewUrl: string; publicUrl?: string; status: GenerationStatus; error?: string }
+export interface AppSettings {
+  theme: 'light' | 'dark';
+  provider: ProviderConfig;
+  optimizer: OptimizerConfig;
+}
+
+// ── Generation parameters ──
+export interface SizePreset {
+  label: string;
+  width: number;
+  height: number;
+  ratio: string;
+}
+
+export interface ReferenceImage {
+  id: string;
+  dataUrl: string;
+  fileName: string;
+}
+
+export interface GenerateParams {
+  prompt: string;
+  negativePrompt: string;
+  model: string;
+  sizePreset: string; // index or 'custom' or ratio string
+  customWidth: number;
+  customHeight: number;
+  resolution: ResolutionLevel;
+  quality: 'standard' | 'hd';
+  style: 'natural' | 'vivid';
+  quantity: number;
+  referenceImages: ReferenceImage[];
+}
+
+// ── Generation result ──
+export type GenerationStatus = 'idle' | 'generating' | 'saved' | 'failed';
+
+export interface GenerationResult {
+  id: string;
+  url: string;
+  prompt: string;
+  model: string;
+  status: GenerationStatus;
+  width?: number;
+  height?: number;
+  error?: string;
+}
+
+// ── Prompt template ──
+export interface PromptTemplate {
+  key: string;
+  label: string;
+  content: string;
+}
+
+// ── Prompt optimization state ──
+export interface OptimizeState {
+  original: string;
+  optimized: string;
+  isOptimizing: boolean;
+  error?: string;
+}
+
+// ── Toast ──
+export type ToastType = 'success' | 'error' | 'info';
+
+export interface Toast {
+  id: string;
+  message: string;
+  type: ToastType;
+}

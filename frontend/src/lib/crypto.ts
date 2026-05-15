@@ -1,50 +1,134 @@
-import type { EncryptedSecret } from '../types'
+/**
+ * Crypto utilities — with HTTP fallback.
+ * In HTTPS contexts, uses Web Crypto API (AES-GCM).
+ * In HTTP contexts, falls back to base64 obfuscation.
+ */
 
-/** UUID v4 generator — works in HTTP (non-secure) contexts where crypto.randomUUID() is unavailable */
-export function randomUUID(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  // Fallback: crypto.getRandomValues IS available in non-secure contexts
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6] & 0x0f) | 0x40 // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80 // variant 1
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0'))
-  return `${hex[0]}${hex[1]}${hex[2]}${hex[3]}-${hex[4]}${hex[5]}-${hex[6]}${hex[7]}-${hex[8]}${hex[9]}-${hex[10]}${hex[11]}${hex[12]}${hex[13]}${hex[14]}${hex[15]}`
+export function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (crypto.getRandomValues(new Uint8Array(1))[0] & 15) >> (c === 'x' ? 0 : 3);
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
-const encoder = new TextEncoder()
-const decoder = new TextDecoder()
-const iterations = 120_000
+// Check if secure crypto is available
+const hasCrypto = typeof crypto !== 'undefined' && !!crypto.subtle;
 
-function toBase64(bytes: ArrayBuffer | Uint8Array) {
-  const array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-  return btoa(String.fromCharCode(...array))
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
-function fromBase64(value: string) {
-  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
-export async function deriveKey(password: string, salt: Uint8Array<ArrayBuffer>) {
-  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey'])
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: salt.buffer as ArrayBuffer, iterations, hash: 'SHA-256' },
+export interface EncryptedData {
+  iv: string;
+  ciphertext: string;
+}
+
+// ─── AES-GCM path (HTTPS) ───────────────────────────────────────
+
+async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle!.importKey(
+    'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle!.deriveKey(
+    { name: 'PBKDF2', salt: salt.buffer as ArrayBuffer, iterations: 100000, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
-    ['encrypt', 'decrypt'],
-  )
+    ['encrypt', 'decrypt']
+  );
 }
 
-export async function encryptSecret(secret: string, password: string): Promise<EncryptedSecret> {
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const key = await deriveKey(password, salt)
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(secret))
-  return { version: 1, algorithm: 'AES-GCM', kdf: 'PBKDF2', salt: toBase64(salt), iv: toBase64(iv), ciphertext: toBase64(ciphertext) }
+const CRYPTO_SALT_KEY = 'ai-image-station:crypto-salt';
+const ENCRYPTION_PASSWORD = 'ai-image-station-local-key';
+
+function getOrCreateSalt(): Uint8Array {
+  const existing = localStorage.getItem(CRYPTO_SALT_KEY);
+  if (existing) {
+    return new Uint8Array(base64ToArrayBuffer(existing));
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  localStorage.setItem(CRYPTO_SALT_KEY, arrayBufferToBase64(salt.buffer));
+  return salt;
 }
 
-export async function decryptSecret(secret: EncryptedSecret, password: string): Promise<string> {
-  const key = await deriveKey(password, fromBase64(secret.salt))
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(secret.iv) }, key, fromBase64(secret.ciphertext))
-  return decoder.decode(plaintext)
+async function encryptAES(plaintext: string): Promise<EncryptedData> {
+  const salt = getOrCreateSalt();
+  const key = await deriveKey(ENCRYPTION_PASSWORD, salt);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ciphertext = await crypto.subtle!.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    enc.encode(plaintext)
+  );
+  return {
+    iv: arrayBufferToBase64(iv.buffer),
+    ciphertext: arrayBufferToBase64(ciphertext),
+  };
+}
+
+async function decryptAES(encrypted: EncryptedData): Promise<string> {
+  const salt = getOrCreateSalt();
+  const key = await deriveKey(ENCRYPTION_PASSWORD, salt);
+  const iv = new Uint8Array(base64ToArrayBuffer(encrypted.iv));
+  const ciphertext = new Uint8Array(base64ToArrayBuffer(encrypted.ciphertext));
+  const plaintext = await crypto.subtle!.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    ciphertext
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
+// ─── Base64 fallback (HTTP) ──────────────────────────────────────
+
+function encryptBase64(plaintext: string): EncryptedData {
+  const encoded = btoa(unescape(encodeURIComponent(plaintext)));
+  return { iv: 'http-fallback', ciphertext: encoded };
+}
+
+function decryptBase64(encrypted: EncryptedData): string {
+  return decodeURIComponent(escape(atob(encrypted.ciphertext)));
+}
+
+// ─── Public API ──────────────────────────────────────────────────
+
+export async function encryptSecret(plaintext: string): Promise<EncryptedData> {
+  if (hasCrypto) {
+    return encryptAES(plaintext);
+  }
+  return encryptBase64(plaintext);
+}
+
+export async function decryptSecret(encrypted: EncryptedData): Promise<string> {
+  // New HTTP-fallback data → base64 decode
+  if (encrypted.iv === 'http-fallback') {
+    return decryptBase64(encrypted);
+  }
+  // Old AES data → need Web Crypto
+  if (hasCrypto) {
+    return decryptAES(encrypted);
+  }
+  // Old AES data but no crypto.subtle (HTTP) → can't decrypt
+  throw new Error('加密数据需要 HTTPS 环境解密。请重新输入 API Key。');
+}
+
+export function maskApiKey(key: string): string {
+  if (key.length <= 8) return '●'.repeat(key.length);
+  return '●'.repeat(key.length - 4) + key.slice(-4);
 }
